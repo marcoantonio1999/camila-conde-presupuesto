@@ -1,0 +1,53 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Manrope", sans-serif;
+  --font-display: "Fraunces", serif;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply m-0 font-sans antialiased;
+  }
+
+  a {
+    @apply text-inherit;
+  }
+
+  button,
+  input {
+    font: inherit;
+  }
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.leaflet-container {
+  font-family: "Manrope", sans-serif;
+  background: #eef4f0;
+}
+
+.leaflet-popup-content-wrapper {
+  border-radius: 1rem;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.18);
+}
+
+.leaflet-popup-content {
+  margin: 0.9rem 1rem;
+}
+
+.leaflet-control-zoom {
+  border: 0;
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.16);
+}
+
+.leaflet-control-zoom a {
+  color: #0f172a;
+}
