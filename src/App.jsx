@@ -31,6 +31,21 @@ const currencyPeso = new Intl.NumberFormat('es-MX', {
   maximumFractionDigits: 0,
 })
 
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const radius = 6371
+  const toRadians = (value) => (value * Math.PI) / 180
+  const dLat = toRadians(lat2 - lat1)
+  const dLon = toRadians(lon2 - lon1)
+  const phi1 = toRadians(lat1)
+  const phi2 = toRadians(lat2)
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLon / 2) ** 2
+
+  return 2 * radius * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
 function cx(...values) {
   return values.filter(Boolean).join(' ')
 }
@@ -43,17 +58,17 @@ function formatBeds(beds) {
   return beds === 0 ? 'Estudio' : beds ?? 'n/d'
 }
 
-function FitMapToListings({ listings }) {
+function FitMapToListings({ campus, listings }) {
   const map = useMap()
 
   useEffect(() => {
     const points = [
-      [reportData.campus.lat, reportData.campus.lon],
+      [campus.lat, campus.lon],
       ...listings.map((item) => [item.lat, item.lon]),
     ]
 
     map.fitBounds(points, { padding: [36, 36], maxZoom: 13 })
-  }, [listings, map])
+  }, [campus.lat, campus.lon, listings, map])
 
   return null
 }
@@ -216,13 +231,23 @@ function ListingCard({ item }) {
 }
 
 function App() {
+  const campus = reportData.campus
+  const listings = reportData.listings.map((item) => ({
+    ...item,
+    distance_km: haversineKm(item.lat, item.lon, campus.lat, campus.lon),
+    maps_url:
+      'https://www.google.com/maps/dir/?api=1' +
+      `&origin=${item.lat},${item.lon}` +
+      `&destination=${campus.lat},${campus.lon}`,
+  }))
+
   const [sourceFilter, setSourceFilter] = useState('all')
   const [modeFilter, setModeFilter] = useState('all')
   const [distanceFilter, setDistanceFilter] = useState('all')
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query.trim().toLowerCase())
 
-  const filteredListings = reportData.listings.filter((item) => {
+  const filteredListings = listings.filter((item) => {
     const sourceMatch = sourceFilter === 'all' || item.source === sourceFilter
     const modeMatch = modeFilter === 'all' || item.cost_mode === modeFilter
     const distanceMatch =
@@ -270,7 +295,7 @@ function App() {
                   1 EUR = {reportData.exchange.eur_to_mxn.toFixed(4)} MXN
                 </span>
                 <span className="rounded-full bg-white/12 px-4 py-2 ring-1 ring-white/10">
-                  Campus con lineas UDC, 20, 22 y 24
+                  Campus da Zapateira • lineas 24 y UDC
                 </span>
               </div>
             </div>
@@ -316,8 +341,8 @@ function App() {
           />
           <StatCard
             label="Referencia de campus"
-            value="Elviña - UDC"
-            note="La distancia compara cada anuncio contra la Facultade de Economia e Empresa."
+            value="Zapateira - UDC"
+            note="La distancia compara cada anuncio contra la ETSAC de la UDC en Campus da Zapateira."
           />
         </section>
 
@@ -410,10 +435,10 @@ function App() {
                 <p className="text-sm font-semibold text-slate-900">Universidad</p>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
                   La referencia del campus sale de{' '}
-                  <a className="font-semibold text-slate-950 underline decoration-slate-300 underline-offset-4" href={reportData.campus.source_url} target="_blank" rel="noreferrer">
+                  <a className="font-semibold text-slate-950 underline decoration-slate-300 underline-offset-4" href={campus.source_url} target="_blank" rel="noreferrer">
                     la UDC
                   </a>
-                  . Las lineas mencionadas son UDC, 20, 22 y 24.
+                  . La referencia usada para la app es la ETSAC en Campus da Zapateira, con lineas 24 y UDC.
                 </p>
               </div>
               <div className="rounded-2xl bg-slate-100/85 p-4">
@@ -446,23 +471,23 @@ function App() {
               </p>
             </div>
             <div className="overflow-hidden rounded-[1.6rem] border border-slate-200/80">
-              <MapContainer center={[reportData.campus.lat, reportData.campus.lon]} zoom={12} scrollWheelZoom={false} className="h-[520px] w-full">
+              <MapContainer center={[campus.lat, campus.lon]} zoom={12} scrollWheelZoom={false} className="h-[520px] w-full">
                 <TileLayer
                   url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
                   subdomains="abcd"
                   attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
                 />
-                <FitMapToListings listings={filteredListings} />
+                <FitMapToListings campus={campus} listings={filteredListings} />
 
                 <CircleMarker
-                  center={[reportData.campus.lat, reportData.campus.lon]}
+                  center={[campus.lat, campus.lon]}
                   radius={9}
                   pathOptions={{ color: '#873c44', fillColor: '#873c44', fillOpacity: 1, weight: 2 }}
                 >
                   <Popup>
                     <div className="space-y-2">
-                      <p className="font-semibold text-slate-950">{reportData.campus.name}</p>
-                      <a href={reportData.campus.source_url} target="_blank" rel="noreferrer">
+                      <p className="font-semibold text-slate-950">{campus.name}</p>
+                      <a href={campus.source_url} target="_blank" rel="noreferrer">
                         Fuente UDC
                       </a>
                     </div>
@@ -529,7 +554,7 @@ function App() {
               <div className="mt-4 space-y-4 text-sm leading-6 text-slate-600">
                 <p>
                   Si quieres reducir rapido: filtra a <span className="font-bold text-slate-950">menos de 2 km</span>{' '}
-                  y compara primero Matogrande, Someso, O Picho y Mesoiro.
+                  y compara primero O Picho, Someso, Mesoiro y La Zapateira.
                 </p>
                 <p>
                   Si prefieres costos mas predecibles: revisa primero las opciones{' '}

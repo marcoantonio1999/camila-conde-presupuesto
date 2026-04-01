@@ -1,11 +1,11 @@
 export const reportData = {
   "build_date": "2026-04-01",
   "campus": {
-    "name": "Campus de Elviña - Facultade de Economía e Empresa (UDC)",
-    "lat": 43.3308924,
-    "lon": -8.4130765,
-    "source_url": "https://www.udc.es/biblioteca.economia/como-chegar/",
-    "source_note": "La UDC indica que al Campus llegan las líneas UDC, 20, 22 y 24."
+    "name": "ETSAC - Escola Técnica Superior de Arquitectura (UDC)",
+    "lat": 43.32726983333334,
+    "lon": -8.40919,
+    "source_url": "https://etsa.udc.es/web/?page_id=12251",
+    "source_note": "La ETSAC publica como referencia Campus da Zapateira, s/n, y las líneas 24 y UDC."
   },
   "exchange": {
     "eur_to_mxn": 20.7188,
