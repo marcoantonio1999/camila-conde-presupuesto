@@ -1,6 +1,8 @@
 import { startTransition, useDeferredValue, useEffect, useState } from 'react'
 import { CircleMarker, MapContainer, Popup, TileLayer, useMap } from 'react-leaflet'
+import { planningData } from './data/planningData'
 import { reportData } from './data/reportData'
+import { spotahomeMeta } from './data/spotahomeMeta'
 
 const sourceStyles = {
   Idealista: {
@@ -19,6 +21,12 @@ const modeStyles = {
   variable: 'bg-amber-100 text-amber-800 ring-amber-900/10',
 }
 
+const availabilityStyles = {
+  ready: 'bg-emerald-100 text-emerald-800 ring-emerald-900/10',
+  caution: 'bg-amber-100 text-amber-800 ring-amber-900/10',
+  blocked: 'bg-rose-100 text-rose-800 ring-rose-900/10',
+}
+
 const currencyEuro = new Intl.NumberFormat('es-ES', {
   style: 'currency',
   currency: 'EUR',
@@ -30,6 +38,27 @@ const currencyPeso = new Intl.NumberFormat('es-MX', {
   currency: 'MXN',
   maximumFractionDigits: 0,
 })
+
+const dateFormatter = new Intl.DateTimeFormat('es-ES', {
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+})
+
+const academicMonths = [
+  { key: 'sep', label: 'sep 2026' },
+  { key: 'oct', label: 'oct 2026' },
+  { key: 'nov', label: 'nov 2026' },
+  { key: 'dec', label: 'dic 2026' },
+  { key: 'jan', label: 'ene 2027' },
+  { key: 'feb', label: 'feb 2027' },
+  { key: 'mar', label: 'mar 2027' },
+  { key: 'apr', label: 'abr 2027' },
+  { key: 'may', label: 'may 2027' },
+  { key: 'jun', label: 'jun 2027' },
+  { key: 'jul', label: 'jul 2027' },
+  { key: 'aug', label: 'ago 2027' },
+]
 
 function haversineKm(lat1, lon1, lat2, lon2) {
   const radius = 6371
@@ -56,6 +85,374 @@ function formatDistance(distance) {
 
 function formatBeds(beds) {
   return beds === 0 ? 'Estudio' : beds ?? 'n/d'
+}
+
+function formatDate(value) {
+  if (!value) {
+    return 'Por confirmar'
+  }
+
+  return dateFormatter.format(new Date(`${value}T00:00:00`))
+}
+
+function spotPhotoUrl(photoId) {
+  return `https://photos.spotahome.com/fsobscale_1600_900_nonverified_ur_15_50/${photoId}.webp`
+}
+
+function compareAnnualThenDistance(left, right) {
+  if (left.annualRecurringTotal !== right.annualRecurringTotal) {
+    return left.annualRecurringTotal - right.annualRecurringTotal
+  }
+
+  return left.distance_km - right.distance_km
+}
+
+function getUtilityBaseline(item) {
+  if (item.beds === 0 || item.beds === 1 || item.beds == null) {
+    return { ...planningData.utilities.baselines.compact }
+  }
+
+  if (item.beds === 2) {
+    return { ...planningData.utilities.baselines.medium }
+  }
+
+  return { ...planningData.utilities.baselines.large }
+}
+
+function getUtilityEstimate(item) {
+  const note = `${item.service_notes} ${item.cost_note}`.toLowerCase()
+  const baseline = getUtilityBaseline(item)
+  const breakdown = { ...baseline }
+  const reasons = []
+
+  const setAllIncluded = /todos los gastos est[aá]n incluidos|facturas incluidas/.test(note)
+
+  if (setAllIncluded) {
+    breakdown.electricity = 0
+    breakdown.gas = 0
+    breakdown.water = 0
+    breakdown.internet = 0
+    reasons.push('La ficha se comporta como costo cerrado.')
+  }
+
+  if (/electricidad: incluido hasta|luz hasta un l[ií]mite|electricidad \(con restricciones\)|electricidad y gas pueden tener limitaciones/.test(note)) {
+    breakdown.electricity = planningData.utilities.cappedBuffers.electricity
+  } else if (/electricidad: incluido|incluye .*luz/.test(note) || setAllIncluded) {
+    breakdown.electricity = 0
+  }
+
+  if (/agua: incluido|incluye .*agua/.test(note) || setAllIncluded) {
+    breakdown.water = 0
+  }
+
+  if (/gas: no hay gas/.test(note)) {
+    breakdown.gas = 0
+  } else if (/gas: incluido hasta|gas \(con restricciones\)/.test(note)) {
+    breakdown.gas = planningData.utilities.cappedBuffers.gas
+  } else if (/gas: incluido/.test(note) || setAllIncluded) {
+    breakdown.gas = 0
+  }
+
+  if (/wifi: incluido|internet: incluido|incluye televisi[oó]n por cable, internet|menciona internet/.test(note) || (setAllIncluded && baseline.internet > 0)) {
+    breakdown.internet = 0
+  }
+
+  if (/no se anuncian suministros incluidos/.test(note)) {
+    reasons.push('La ficha no cierra suministros; se usa estimacion completa.')
+  }
+
+  if (/gastos de comunidad incluidos/.test(note)) {
+    reasons.push('La comunidad ya va absorbida en la renta.')
+  }
+
+  if (/gas natural individual/.test(note)) {
+    reasons.push('Hay consumo de gas separado del alquiler.')
+  }
+
+  const total = Object.values(breakdown).reduce((sum, value) => sum + value, 0)
+  const includedCount = Object.entries(baseline).reduce(
+    (sum, [key, value]) => sum + (breakdown[key] < value ? 1 : 0),
+    0,
+  )
+
+  return {
+    baseline,
+    breakdown,
+    total,
+    annualTotal: total * 12,
+    includedCount,
+    reasons,
+  }
+}
+
+function getTransportEstimate(distanceKm) {
+  const band =
+    planningData.transport.rideBands.find((entry) => distanceKm <= entry.maxKm) ??
+    planningData.transport.rideBands.at(-1)
+  const monthly = band.ridesPerMonth * planningData.transport.farePerRideEur
+  const annual =
+    monthly * planningData.transport.activeMonths +
+    monthly * planningData.transport.lightMonthFactor
+
+  return {
+    ...band,
+    monthly,
+    annual,
+  }
+}
+
+function getRentSchedule(item, meta) {
+  if (meta?.priceType === 'byMonth' && meta.pricesByMonth) {
+    return academicMonths.map((month) => ({
+      ...month,
+      rent: meta.pricesByMonth[month.key] ?? item.price_eur,
+    }))
+  }
+
+  return academicMonths.map((month) => ({
+    ...month,
+    rent: item.price_eur,
+  }))
+}
+
+function getDepositMonths(item) {
+  if (/dos meses de fianza/i.test(item.source_note)) {
+    return 2
+  }
+
+  return 1
+}
+
+function getAvailability(item, meta) {
+  if (meta?.availableFrom) {
+    if (meta.availableFrom <= planningData.academicYear.start) {
+      return {
+        status: 'ready',
+        label: 'sirve para septiembre 2026',
+        ready: true,
+      }
+    }
+
+    return {
+      status: 'blocked',
+      label: `disponible desde ${formatDate(meta.availableFrom)}`,
+      ready: false,
+    }
+  }
+
+  return {
+    status: 'caution',
+    label: 'disponibilidad no publicada',
+    ready: null,
+  }
+}
+
+function getStartupEstimate(item, firstMonthRent) {
+  const depositMonths = getDepositMonths(item)
+  const arrivalDays =
+    item.source === 'Idealista'
+      ? planningData.arrival.idealistaDaysEarly
+      : planningData.arrival.onlineDaysEarly
+  const temporaryStay = arrivalDays * planningData.arrival.nightlyBufferEur
+
+  return {
+    depositMonths,
+    arrivalDays,
+    temporaryStay,
+    firstMonthRent,
+    cashNeeded: firstMonthRent * (1 + depositMonths) + temporaryStay,
+  }
+}
+
+function getRequirements(item, meta, availability) {
+  const lines = []
+
+  if (item.source === 'Idealista') {
+    if (/m[ií]nimo un a[nñ]o/i.test(item.source_note)) {
+      lines.push('La ficha esta orientada a contrato de 12 meses.')
+    }
+
+    if (/estancia m[ií]nima de 31 d[ií]as/i.test(item.source_note)) {
+      lines.push('La ficha publica estancia minima de 31 dias.')
+    }
+
+    if (/menores de 6 meses/i.test(item.service_notes)) {
+      lines.push('Si la estancia baja de 6 meses, el precio cambia y hay que consultarlo.')
+    }
+
+    if (/dos meses de fianza/i.test(item.source_note)) {
+      lines.push('El anuncio publica dos meses de fianza.')
+    } else {
+      lines.push('Como minimo presupuesté una fianza recuperable de un mes.')
+    }
+
+    lines.push('Disponibilidad exacta no publicada: conviene escribir y pedir visita antes de volar.')
+    return lines
+  }
+
+  lines.push(`Disponible desde ${formatDate(meta?.availableFrom)}.`)
+
+  if (meta?.minDays) {
+    lines.push(`Acepta reservas desde ${meta.minDays} dias.`)
+  }
+
+  if (meta?.maxDays) {
+    lines.push(`La ficha publica un maximo de ${meta.maxDays} dias.`)
+  }
+
+  if (meta?.landlordName) {
+    lines.push(`Gestor o anfitrion publicado: ${meta.landlordName}.`)
+  }
+
+  lines.push(meta?.petFriendly ? 'Admite mascotas.' : 'No admite mascotas.')
+  lines.push(meta?.smokingAllowed ? 'Permite fumar.' : 'No permite fumar.')
+
+  if (meta?.couplesAllowed) {
+    lines.push('La ficha indica que acepta parejas.')
+  }
+
+  if (availability.ready === false) {
+    lines.push('No sirve para entrar en septiembre de 2026 sin buscar alojamiento puente.')
+  }
+
+  lines.push('La tarifa/plataforma de Spotahome no se suma al total porque la ficha no publica un importe fijo.')
+  return lines
+}
+
+function getPhotoGallery(item, meta) {
+  if (meta?.photoIds?.length) {
+    return {
+      photos: meta.photoIds.map(spotPhotoUrl),
+      capturedCount: meta.photoIds.length,
+      totalCount: meta.photoCount,
+      note:
+        meta.photoCount > meta.photoIds.length
+          ? `Se capturaron ${meta.photoIds.length} de ${meta.photoCount} fotos publicas de Spotahome.`
+          : `Galeria publica capturada: ${meta.photoCount} fotos.`,
+    }
+  }
+
+  if (item.image_url) {
+    return {
+      photos: [item.image_url],
+      capturedCount: 1,
+      totalCount: 1,
+      note:
+        item.source === 'Idealista'
+          ? 'En esta extraccion Idealista deja visible la foto principal; abre el anuncio para ver la galeria completa.'
+          : 'Solo se pudo capturar una imagen publica.',
+    }
+  }
+
+  return {
+    photos: [],
+    capturedCount: 0,
+    totalCount: 0,
+    note: 'La ficha no expone fotos publicas reutilizables.',
+  }
+}
+
+function enrichListing(item, campus) {
+  const meta = spotahomeMeta[item.id]
+  const distance_km = haversineKm(item.lat, item.lon, campus.lat, campus.lon)
+  const maps_url =
+    'https://www.google.com/maps/dir/?api=1' +
+    `&origin=${item.lat},${item.lon}` +
+    `&destination=${campus.lat},${campus.lon}`
+  const rentSchedule = getRentSchedule(item, meta)
+  const annualRent = rentSchedule.reduce((sum, month) => sum + month.rent, 0)
+  const averageMonthlyRent = annualRent / rentSchedule.length
+  const utilities = getUtilityEstimate(item)
+  const transport = getTransportEstimate(distance_km)
+  const availability = getAvailability(item, meta)
+  const startup = getStartupEstimate(item, rentSchedule[0].rent)
+  const gallery = getPhotoGallery(item, meta)
+  const requirementLines = getRequirements(item, meta, availability)
+  const monthlyAverageTotal = averageMonthlyRent + utilities.total + transport.annual / 12
+  const annualRecurringTotal = annualRent + utilities.annualTotal + transport.annual
+  const predictableScore =
+    (item.cost_mode !== 'base' ? 2 : 0) +
+    utilities.includedCount +
+    (availability.ready === true ? 1 : 0)
+  const pricingProfile =
+    meta?.priceType === 'byMonth'
+      ? `Renta variable: sep ${currencyEuro.format(rentSchedule[0].rent)}, oct ${currencyEuro.format(rentSchedule[1].rent)}, jul ${currencyEuro.format(rentSchedule[10].rent)} y ago ${currencyEuro.format(rentSchedule[11].rent)}.`
+      : `Renta estable para el anio completo: ${currencyEuro.format(item.price_eur)} al mes.`
+
+  return {
+    ...item,
+    meta,
+    distance_km,
+    maps_url,
+    rentSchedule,
+    annualRent,
+    averageMonthlyRent,
+    utilities,
+    transport,
+    availability,
+    startup,
+    gallery,
+    requirementLines,
+    monthlyAverageTotal,
+    annualRecurringTotal,
+    predictableScore,
+    pricingProfile,
+  }
+}
+
+function pickScenario(candidates, chosenIds) {
+  const next = candidates.find((item) => !chosenIds.has(item.id))
+
+  if (next) {
+    chosenIds.add(next.id)
+  }
+
+  return next ?? null
+}
+
+function buildRecommendedScenarios(listings) {
+  const usable = listings
+    .filter((item) => item.availability.ready !== false)
+    .slice()
+    .sort(compareAnnualThenDistance)
+  const chosenIds = new Set()
+
+  const economy = pickScenario(usable, chosenIds)
+  const balanced = pickScenario(
+    usable.filter((item) => item.distance_km <= 1.5).sort(compareAnnualThenDistance),
+    chosenIds,
+  )
+  const predictable = pickScenario(
+    usable.filter((item) => item.predictableScore >= 5).sort(compareAnnualThenDistance),
+    chosenIds,
+  )
+
+  return [
+    {
+      id: 'economy',
+      title: 'Presupuesto ajustado',
+      kicker: 'minimo recurrente',
+      description:
+        'La opcion mas barata para sostener el anio completo aun asumiendo servicios, desplazamientos y caja inicial realista.',
+      item: economy,
+    },
+    {
+      id: 'balanced',
+      title: 'Presupuesto equilibrado',
+      kicker: 'precio + cercania',
+      description:
+        'El mejor punto medio para llegar a Arquitectura con poco traslado y sin disparar la renta total del curso.',
+      item: balanced,
+    },
+    {
+      id: 'predictable',
+      title: 'Presupuesto predecible',
+      kicker: 'menos sorpresas',
+      description:
+        'Prioriza fichas con mas gasto cerrado o mejor visibilidad de reglas, incluso si no son las mas baratas por renta base.',
+      item: predictable,
+    },
+  ]
 }
 
 function FitMapToListings({ campus, listings }) {
@@ -100,47 +497,128 @@ function StatCard({ label, value, note }) {
   )
 }
 
-function SpotlightCard({ title, item, accent }) {
-  if (!item) {
+function MapLegendChip({ tone, children }) {
+  return (
+    <span className={cx('inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1', tone)}>
+      {children}
+    </span>
+  )
+}
+
+function ScenarioCard({ scenario }) {
+  if (!scenario.item) {
     return null
   }
 
   return (
-    <article className="rounded-[1.5rem] border border-slate-200/80 bg-white/85 p-4">
-      <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-slate-400">{title}</p>
-      <h3 className="mt-2 text-lg font-bold leading-tight text-slate-950">{item.title}</h3>
-      <p className="mt-2 text-sm text-slate-500">{item.location_label}</p>
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <span className={cx('rounded-full px-3 py-1 text-sm font-semibold', accent)}>
-          {currencyEuro.format(item.price_eur)}
-        </span>
-        <span className="text-sm font-medium text-slate-500">{formatDistance(item.distance_km)} al campus</span>
+    <article className="rounded-[1.7rem] border border-white/10 bg-white/10 p-5 backdrop-blur-xl">
+      <p className="text-xs font-extrabold uppercase tracking-[0.22em] text-white/58">{scenario.kicker}</p>
+      <h3 className="mt-2 text-2xl font-bold leading-tight text-white">{scenario.title}</h3>
+      <p className="mt-3 text-sm leading-6 text-white/78">{scenario.description}</p>
+      <div className="mt-5 rounded-[1.4rem] border border-white/10 bg-white/12 p-4">
+        <p className="text-sm font-semibold text-white/80">{scenario.item.title}</p>
+        <p className="mt-1 text-sm text-white/60">{scenario.item.location_label}</p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="rounded-2xl bg-white/10 p-3">
+            <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-white/50">Total anual</p>
+            <p className="mt-2 text-lg font-bold text-white">
+              {currencyEuro.format(scenario.item.annualRecurringTotal)}
+            </p>
+          </div>
+          <div className="rounded-2xl bg-white/10 p-3">
+            <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-white/50">Mes comparable</p>
+            <p className="mt-2 text-lg font-bold text-white">
+              {currencyEuro.format(scenario.item.monthlyAverageTotal)}
+            </p>
+          </div>
+        </div>
+        <p className="mt-4 text-sm leading-6 text-white/72">
+          Servicios estimados: {currencyEuro.format(scenario.item.utilities.total)}/mes. Traslado:{' '}
+          {currencyEuro.format(scenario.item.transport.annual)}/anio.
+        </p>
       </div>
     </article>
   )
 }
 
-function MapLegendChip({ tone, children }) {
+function ListingCarousel({ item }) {
+  const [index, setIndex] = useState(0)
+  const totalSlides = item.gallery.photos.length
+
+  if (totalSlides === 0) {
+    return <div className="min-h-80 bg-[linear-gradient(135deg,#dfe9e4,#e9edf5)]" />
+  }
+
+  const currentPhoto = item.gallery.photos[index]
+
   return (
-    <span className={cx('inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1', tone)}>{children}</span>
+    <div className="relative min-h-80 overflow-hidden bg-slate-200">
+      <div
+        className="absolute inset-0 bg-cover bg-center"
+        style={{
+          backgroundImage: `linear-gradient(180deg, rgba(10,15,22,0.06), rgba(10,15,22,0.28)), url("${currentPhoto}")`,
+        }}
+      />
+
+      <div className="absolute inset-x-0 top-0 flex items-start justify-between gap-3 p-4">
+        <span className="rounded-full bg-black/55 px-3 py-1 text-xs font-semibold text-white">
+          {index + 1} / {item.gallery.capturedCount}
+          {item.gallery.totalCount > item.gallery.capturedCount ? ` de ${item.gallery.totalCount}` : ''}
+        </span>
+        <span className="rounded-full bg-white/88 px-3 py-1 text-xs font-semibold text-slate-700">
+          {item.source}
+        </span>
+      </div>
+
+      {totalSlides > 1 && (
+        <>
+          <button
+            type="button"
+            onClick={() => setIndex((previous) => (previous - 1 + totalSlides) % totalSlides)}
+            className="absolute left-4 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-xl font-bold text-slate-900 shadow-xl transition hover:bg-white"
+            aria-label="Foto anterior"
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            onClick={() => setIndex((previous) => (previous + 1) % totalSlides)}
+            className="absolute right-4 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-xl font-bold text-slate-900 shadow-xl transition hover:bg-white"
+            aria-label="Foto siguiente"
+          >
+            ›
+          </button>
+        </>
+      )}
+
+      {totalSlides > 1 && (
+        <div className="absolute inset-x-0 bottom-4 flex justify-center gap-2 px-4">
+          {item.gallery.photos.map((photo, photoIndex) => (
+            <button
+              key={`${item.id}-photo-${photo}`}
+              type="button"
+              onClick={() => setIndex(photoIndex)}
+              className={cx(
+                'h-2.5 w-8 rounded-full transition',
+                photoIndex === index ? 'bg-white' : 'bg-white/45 hover:bg-white/70',
+              )}
+              aria-label={`Ir a foto ${photoIndex + 1}`}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
 function ListingCard({ item }) {
   const sourceStyle = sourceStyles[item.source]
-  const imageStyle = item.image_url
-    ? {
-        backgroundImage: `linear-gradient(180deg, rgba(10,15,22,0.05), rgba(10,15,22,0.2)), url("${item.image_url}")`,
-      }
-    : undefined
 
   return (
     <article className="overflow-hidden rounded-[1.8rem] border border-white/70 bg-white/90 shadow-[0_20px_60px_rgba(49,38,20,0.08)] backdrop-blur">
       <div className="grid gap-0 xl:grid-cols-[0.92fr_1.08fr]">
-        <div
-          className="min-h-72 bg-[linear-gradient(135deg,#dfe9e4,#e9edf5)] bg-cover bg-center"
-          style={imageStyle}
-        />
+        <ListingCarousel key={`${item.id}-${item.gallery.capturedCount}`} item={item} />
+
         <div className="flex flex-col gap-4 p-5 sm:p-6">
           <div className="flex flex-wrap gap-2">
             <span
@@ -159,8 +637,13 @@ function ListingCard({ item }) {
             >
               {item.cost_mode}
             </span>
-            <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-900/5">
-              {item.approximate ? 'ubicacion aproximada' : 'ubicacion precisa'}
+            <span
+              className={cx(
+                'inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1',
+                availabilityStyles[item.availability.status],
+              )}
+            >
+              {item.availability.label}
             </span>
           </div>
 
@@ -171,8 +654,10 @@ function ListingCard({ item }) {
           </div>
 
           <div className="flex flex-wrap items-end gap-3">
-            <p className="text-3xl font-black text-slate-950">{currencyEuro.format(item.price_eur)}</p>
-            <p className="pb-1 text-sm font-medium text-slate-500">{currencyPeso.format(item.price_mxn)}</p>
+            <p className="text-3xl font-black text-slate-950">
+              {currencyEuro.format(item.monthlyAverageTotal)}
+            </p>
+            <p className="pb-1 text-sm font-medium text-slate-500">mes comparable real</p>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
@@ -181,16 +666,49 @@ function ListingCard({ item }) {
               <p className="mt-2 text-base font-semibold text-slate-900">{formatBeds(item.beds)}</p>
             </div>
             <div className="rounded-2xl bg-slate-100/90 p-4">
-              <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">Baños</p>
+              <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">Banos</p>
               <p className="mt-2 text-base font-semibold text-slate-900">{item.baths ?? 'n/d'}</p>
             </div>
             <div className="rounded-2xl bg-slate-100/90 p-4">
               <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">Superficie</p>
-              <p className="mt-2 text-base font-semibold text-slate-900">{item.area_sqm ? `${item.area_sqm} m²` : 'n/d'}</p>
+              <p className="mt-2 text-base font-semibold text-slate-900">
+                {item.area_sqm ? `${item.area_sqm} m²` : 'n/d'}
+              </p>
             </div>
             <div className="rounded-2xl bg-slate-100/90 p-4">
               <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">Distancia</p>
               <p className="mt-2 text-base font-semibold text-slate-900">{formatDistance(item.distance_km)}</p>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">Renta anual</p>
+              <p className="mt-2 text-lg font-bold text-slate-950">{currencyEuro.format(item.annualRent)}</p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">
+                Total anual recurrente
+              </p>
+              <p className="mt-2 text-lg font-bold text-slate-950">
+                {currencyEuro.format(item.annualRecurringTotal)}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">
+                Servicios estimados
+              </p>
+              <p className="mt-2 text-lg font-bold text-slate-950">
+                {currencyEuro.format(item.utilities.total)}/mes
+              </p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">
+                Caja inicial estimada
+              </p>
+              <p className="mt-2 text-lg font-bold text-slate-950">
+                {currencyEuro.format(item.startup.cashNeeded)}
+              </p>
             </div>
           </div>
 
@@ -199,12 +717,103 @@ function ListingCard({ item }) {
               <span className="font-bold text-slate-900">Resumen:</span> {item.summary}
             </p>
             <p>
-              <span className="font-bold text-slate-900">Servicios:</span> {item.service_notes}
+              <span className="font-bold text-slate-900">Servicios publicados:</span> {item.service_notes}
             </p>
             <p>
-              <span className="font-bold text-slate-900">Nota de costo:</span> {item.cost_note}
+              <span className="font-bold text-slate-900">Lectura anual:</span> {item.pricingProfile}
+            </p>
+            <p>
+              <span className="font-bold text-slate-900">Galeria:</span> {item.gallery.note}
             </p>
           </div>
+
+          <details className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+            <summary className="cursor-pointer list-none text-sm font-bold text-slate-950">
+              Desglose de presupuesto anual
+            </summary>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl bg-white p-4">
+                <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">Renta media</p>
+                <p className="mt-2 text-base font-semibold text-slate-900">
+                  {currencyEuro.format(item.averageMonthlyRent)}/mes
+                </p>
+                <p className="mt-2 text-sm text-slate-500">
+                  {currencyEuro.format(item.annualRent)} entre {academicMonths.length} meses.
+                </p>
+              </div>
+              <div className="rounded-2xl bg-white p-4">
+                <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">Traslado</p>
+                <p className="mt-2 text-base font-semibold text-slate-900">
+                  {currencyEuro.format(item.transport.annual)}/anio
+                </p>
+                <p className="mt-2 text-sm text-slate-500">{item.transport.note}</p>
+              </div>
+              <div className="rounded-2xl bg-white p-4 sm:col-span-2">
+                <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">
+                  Servicios por mes
+                </p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                    Electricidad: {currencyEuro.format(item.utilities.breakdown.electricity)}
+                  </p>
+                  <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                    Gas o calefaccion: {currencyEuro.format(item.utilities.breakdown.gas)}
+                  </p>
+                  <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                    Agua: {currencyEuro.format(item.utilities.breakdown.water)}
+                  </p>
+                  <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                    Internet: {currencyEuro.format(item.utilities.breakdown.internet)}
+                  </p>
+                </div>
+                <p className="mt-3 text-sm leading-6 text-slate-500">
+                  Total servicios: {currencyEuro.format(item.utilities.total)}/mes. La fianza no entra en el
+                  costo anual porque deberia recuperarse al salir si todo queda bien.
+                </p>
+              </div>
+            </div>
+          </details>
+
+          <details className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+            <summary className="cursor-pointer list-none text-sm font-bold text-slate-950">
+              Requisitos, llegada y disponibilidad
+            </summary>
+            <div className="mt-4 space-y-3">
+              <ul className="space-y-2 text-sm leading-6 text-slate-600">
+                {item.requirementLines.map((line) => (
+                  <li key={`${item.id}-${line}`} className="rounded-2xl bg-white px-4 py-3">
+                    {line}
+                  </li>
+                ))}
+              </ul>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <p className="rounded-2xl bg-white px-4 py-3 text-sm text-slate-700">
+                  Llegada puente: {item.startup.arrivalDays} noches x {currencyEuro.format(planningData.arrival.nightlyBufferEur)}.
+                </p>
+                <p className="rounded-2xl bg-white px-4 py-3 text-sm text-slate-700">
+                  Fianza presupuestada: {item.startup.depositMonths} mes(es) recuperables.
+                </p>
+              </div>
+            </div>
+          </details>
+
+          {item.meta?.priceType === 'byMonth' && (
+            <details className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+              <summary className="cursor-pointer list-none text-sm font-bold text-slate-950">
+                Perfil de renta mes a mes
+              </summary>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {item.rentSchedule.map((month) => (
+                  <span
+                    key={`${item.id}-${month.key}`}
+                    className="rounded-full bg-white px-3 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200"
+                  >
+                    {month.label}: {currencyEuro.format(month.rent)}
+                  </span>
+                ))}
+              </div>
+            </details>
+          )}
 
           <div className="mt-auto flex flex-wrap gap-3">
             <a
@@ -232,118 +841,182 @@ function ListingCard({ item }) {
 
 function App() {
   const campus = reportData.campus
-  const listings = reportData.listings.map((item) => ({
-    ...item,
-    distance_km: haversineKm(item.lat, item.lon, campus.lat, campus.lon),
-    maps_url:
-      'https://www.google.com/maps/dir/?api=1' +
-      `&origin=${item.lat},${item.lon}` +
-      `&destination=${campus.lat},${campus.lon}`,
-  }))
+  const allListings = reportData.listings.map((item) => enrichListing(item, campus))
+  const recommendedScenarios = buildRecommendedScenarios(allListings)
 
   const [sourceFilter, setSourceFilter] = useState('all')
   const [modeFilter, setModeFilter] = useState('all')
   const [distanceFilter, setDistanceFilter] = useState('all')
+  const [arrivalFilter, setArrivalFilter] = useState('all')
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query.trim().toLowerCase())
 
-  const filteredListings = listings.filter((item) => {
+  const filteredListings = allListings.filter((item) => {
     const sourceMatch = sourceFilter === 'all' || item.source === sourceFilter
     const modeMatch = modeFilter === 'all' || item.cost_mode === modeFilter
     const distanceMatch =
       distanceFilter === 'all' ||
       (distanceFilter === 'near' && item.distance_km <= 2) ||
       (distanceFilter === 'walkable' && item.distance_km <= 1)
+    const arrivalMatch =
+      arrivalFilter === 'all' ||
+      (arrivalFilter === 'ready' && item.availability.ready !== false) ||
+      (arrivalFilter === 'blocked' && item.availability.ready === false)
+    const searchableFields = [
+      item.title,
+      item.location_label,
+      item.summary,
+      item.service_notes,
+      item.cost_note,
+      item.source_note,
+      item.pricingProfile,
+      item.requirementLines.join(' '),
+    ]
     const queryMatch =
       deferredQuery.length === 0 ||
-      [item.title, item.location_label, item.summary, item.service_notes].some((field) =>
-        field.toLowerCase().includes(deferredQuery),
-      )
+      searchableFields.some((field) => field.toLowerCase().includes(deferredQuery))
 
-    return sourceMatch && modeMatch && distanceMatch && queryMatch
+    return sourceMatch && modeMatch && distanceMatch && arrivalMatch && queryMatch
   })
 
-  const cheapestVisible = filteredListings[0]
-  const closestVisible = [...filteredListings].sort((a, b) => a.distance_km - b.distance_km)[0]
-  const bestClosedVisible = filteredListings.find((item) => item.cost_mode === 'cerrado')
-  const visibleBudget = filteredListings.filter((item) => item.within_budget).length
-  const visibleAverage =
+  const visibleAnnualAverage =
     filteredListings.length > 0
-      ? filteredListings.reduce((sum, item) => sum + item.price_eur, 0) / filteredListings.length
+      ? filteredListings.reduce((sum, item) => sum + item.annualRecurringTotal, 0) /
+        filteredListings.length
       : 0
+  const visibleMonthlyAverage =
+    filteredListings.length > 0
+      ? filteredListings.reduce((sum, item) => sum + item.monthlyAverageTotal, 0) /
+        filteredListings.length
+      : 0
+  const visibleStartupAverage =
+    filteredListings.length > 0
+      ? filteredListings.reduce((sum, item) => sum + item.startup.cashNeeded, 0) / filteredListings.length
+      : 0
+  const visibleReadyCount = filteredListings.filter((item) => item.availability.ready !== false).length
+  const scenarioAverage =
+    recommendedScenarios.reduce((sum, scenario) => sum + (scenario.item?.annualRecurringTotal ?? 0), 0) /
+    recommendedScenarios.filter((scenario) => scenario.item).length
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(31,95,83,0.18),transparent_28rem),radial-gradient(circle_at_left_center,rgba(135,60,68,0.12),transparent_24rem),linear-gradient(180deg,#faf6ef_0%,#f4efe8_100%)] text-slate-900">
       <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8 lg:py-8">
         <header className="relative overflow-hidden rounded-[2.2rem] bg-[linear-gradient(135deg,rgba(16,47,43,0.98),rgba(31,79,127,0.92))] p-6 text-white shadow-[0_28px_80px_rgba(23,28,33,0.18)] sm:p-8 lg:p-10">
           <div className="absolute inset-y-0 right-0 hidden w-80 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.14),transparent_60%)] lg:block" />
-          <div className="grid gap-8 lg:grid-cols-[1.3fr_0.9fr]">
+          <div className="grid gap-8 lg:grid-cols-[1.15fr_0.85fr]">
             <div className="relative z-10">
               <p className="inline-flex rounded-full bg-white/12 px-4 py-2 text-xs font-extrabold uppercase tracking-[0.24em] text-white/90 ring-1 ring-white/10">
-                Camila Conde • intercambio en A Coruña
+                Camila Conde • intercambio en Arquitectura UDC
               </p>
-              <h1 className="mt-5 max-w-xl font-display text-5xl leading-[0.94] text-balance sm:text-6xl lg:text-7xl">
-                Presupuesto de Camila Conde
+              <h1 className="mt-5 max-w-3xl font-display text-5xl leading-[0.94] text-balance sm:text-6xl lg:text-7xl">
+                Presupuesto anual completo para vivir en A Coruna
               </h1>
               <p className="mt-5 max-w-3xl text-base leading-7 text-white/78 sm:text-lg">
-                Comparativa real de 28 anuncios para el intercambio en la UDC. La app mantiene el mapa,
-                costos en EUR y MXN, servicios y distancia al Campus de Elviña, pero ahora en una UI más
-                limpia para revisar opciones, filtrar y abrir cada anuncio desde internet.
+                Esta version proyecta el intercambio completo entre{' '}
+                <span className="font-semibold text-white">{planningData.academicYear.planningLabel}</span>,
+                suma servicios, traslado a Arquitectura UDC, caja inicial para entrar al piso, notas para llegar
+                antes a ver o firmar, y marca si una ficha sirve o no para septiembre de 2026.
               </p>
               <div className="mt-6 flex flex-wrap gap-3 text-sm font-medium text-white/88">
                 <span className="rounded-full bg-white/12 px-4 py-2 ring-1 ring-white/10">
                   1 EUR = {reportData.exchange.eur_to_mxn.toFixed(4)} MXN
                 </span>
                 <span className="rounded-full bg-white/12 px-4 py-2 ring-1 ring-white/10">
-                  Campus da Zapateira • lineas 24 y UDC
+                  ETSAC • Campus da Zapateira • lineas 24 y UDC
+                </span>
+                <span className="rounded-full bg-white/12 px-4 py-2 ring-1 ring-white/10">
+                  Bus universitario: {currencyEuro.format(planningData.transport.farePerRideEur)} por viaje
                 </span>
               </div>
             </div>
 
-            <aside className="relative z-10 self-end rounded-[1.8rem] border border-white/10 bg-white/10 p-5 backdrop-blur-xl">
-              <p className="text-sm font-extrabold uppercase tracking-[0.22em] text-white/60">Decision rapida</p>
-              <div className="mt-4 grid gap-4">
-                <SpotlightCard
-                  title="Mas barato en el filtro actual"
-                  item={cheapestVisible}
-                  accent="bg-white/15 text-white"
-                />
-                <SpotlightCard
-                  title="Mas cerca del campus"
-                  item={closestVisible}
-                  accent="bg-emerald-300/20 text-emerald-50"
-                />
-                <SpotlightCard
-                  title="Costo cerrado mas competitivo"
-                  item={bestClosedVisible}
-                  accent="bg-amber-300/20 text-amber-50"
-                />
-              </div>
+            <aside className="relative z-10 grid gap-4 self-end">
+              {recommendedScenarios.map((scenario) => (
+                <ScenarioCard key={scenario.id} scenario={scenario} />
+              ))}
             </aside>
           </div>
         </header>
 
         <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <StatCard
-            label="Anuncios visibles"
-            value={`${filteredListings.length} opciones`}
-            note="Se actualiza con la busqueda y los filtros activos."
+            label="Opciones visibles"
+            value={`${filteredListings.length} anuncios`}
+            note={`${visibleReadyCount} sirven para septiembre 2026 o no publican bloqueo de fecha.`}
           />
           <StatCard
-            label="Dentro del tope"
-            value={`${visibleBudget} / ${filteredListings.length || 0}`}
-            note={`Tope objetivo: ${currencyEuro.format(reportData.summary.budget_eur)} o ${currencyPeso.format(reportData.summary.budget_mxn)}.`}
+            label="Promedio mensual real"
+            value={filteredListings.length ? currencyEuro.format(visibleMonthlyAverage) : 'Sin resultados'}
+            note="Renta media del anio + servicios estimados + transporte prorrateado."
           />
           <StatCard
-            label="Promedio visible"
-            value={filteredListings.length ? currencyEuro.format(visibleAverage) : 'Sin resultados'}
-            note="Promedio simple del costo publicado de las opciones visibles."
+            label="Promedio anual"
+            value={filteredListings.length ? currencyEuro.format(visibleAnnualAverage) : 'Sin resultados'}
+            note="No incluye fianza porque la fianza deberia recuperarse al salir."
           />
           <StatCard
-            label="Referencia de campus"
-            value="Zapateira - UDC"
-            note="La distancia compara cada anuncio contra la ETSAC de la UDC en Campus da Zapateira."
+            label="Caja inicial media"
+            value={filteredListings.length ? currencyEuro.format(visibleStartupAverage) : 'Sin resultados'}
+            note={`Incluye renta del primer mes, fianza minima y puente de ${planningData.arrival.nightlyBufferEur} €/noche.`}
           />
+        </section>
+
+        <section className="mt-6 grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+          <article className="rounded-[2rem] border border-white/70 bg-white/82 p-5 shadow-[0_20px_60px_rgba(49,38,20,0.08)] backdrop-blur sm:p-6">
+            <p className="text-xs font-extrabold uppercase tracking-[0.22em] text-slate-400">Metodologia anual</p>
+            <h2 className="mt-2 font-display text-3xl leading-tight text-slate-950">Como se calcula el anio completo</h2>
+            <div className="mt-5 space-y-4 text-sm leading-6 text-slate-600">
+              <p>{planningData.academicYear.note}</p>
+              <p>
+                Las fichas con precio variable usan el perfil real de sep 2026 a ago 2027. Las fijas multiplican
+                la renta publicada por 12.
+              </p>
+              <p>
+                El transporte usa la tarifa oficial del bus universitario y una intensidad distinta segun la
+                distancia a Arquitectura: caminar, mixto, bus habitual o bus casi diario.
+              </p>
+              <p>
+                Los servicios se cierran con lo que publica cada ficha. Cuando el anuncio no dice nada, se mete
+                un estimado conservador de electricidad, gas, agua e internet para que no te engañe la renta
+                base.
+              </p>
+            </div>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              {planningData.academicYear.timeline.map((entry) => (
+                <div key={entry} className="rounded-2xl bg-slate-100/85 p-4 text-sm leading-6 text-slate-700">
+                  {entry}
+                </div>
+              ))}
+            </div>
+          </article>
+
+          <article className="rounded-[2rem] border border-white/70 bg-white/82 p-5 shadow-[0_20px_60px_rgba(49,38,20,0.08)] backdrop-blur sm:p-6">
+            <p className="text-xs font-extrabold uppercase tracking-[0.22em] text-slate-400">Llegada y firma</p>
+            <h2 className="mt-2 font-display text-3xl leading-tight text-slate-950">Lo que conviene hacer antes de volar</h2>
+            <div className="mt-5 grid gap-4">
+              <div className="rounded-2xl bg-slate-100/85 p-4">
+                <p className="text-sm font-semibold text-slate-900">Si cierras por Idealista</p>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  Llega con al menos {planningData.arrival.idealistaDaysEarly} dias de margen para ver el piso,
+                  revisar el contrato, pagar la fianza y levantar inventario.
+                </p>
+              </div>
+              <div className="rounded-2xl bg-slate-100/85 p-4">
+                <p className="text-sm font-semibold text-slate-900">Si cierras online</p>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  Con Spotahome suele bastar un margen de {planningData.arrival.onlineDaysEarly} dias, pero solo
+                  si la entrada ya quedo confirmada y la ficha si esta disponible para septiembre de 2026.
+                </p>
+              </div>
+              <div className="rounded-2xl bg-slate-100/85 p-4">
+                <p className="text-sm font-semibold text-slate-900">Documentos y caja</p>
+                <p className="mt-2 text-sm leading-6 text-slate-600">
+                  Lleva carta de aceptacion de la UDC, pasaporte o NIE si ya lo tienes, prueba de beca o fondos,
+                  y caja para primer mes, fianza y alojamiento puente.
+                </p>
+              </div>
+            </div>
+          </article>
         </section>
 
         <section className="mt-6 grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
@@ -352,16 +1025,18 @@ function App() {
               <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                 <div>
                   <p className="text-xs font-extrabold uppercase tracking-[0.22em] text-slate-400">Explorador</p>
-                  <h2 className="mt-2 font-display text-3xl leading-tight text-slate-950">Filtra y compara</h2>
+                  <h2 className="mt-2 font-display text-3xl leading-tight text-slate-950">Filtra la comparativa</h2>
                 </div>
                 <p className="max-w-xl text-sm leading-6 text-slate-500">
-                  Puedes quedarte con solo una fuente, revisar un tipo de costo o reducir a opciones cerca del
-                  campus. Todo sigue ordenado por costo publicado.
+                  El ranking se sigue leyendo por costo publicado, pero cada ficha ya muestra el impacto anual
+                  realista para todo el intercambio.
                 </p>
               </div>
 
               <label className="block">
-                <span className="mb-2 block text-sm font-semibold text-slate-700">Buscar por titulo, zona o servicios</span>
+                <span className="mb-2 block text-sm font-semibold text-slate-700">
+                  Buscar por zona, servicios o requisitos
+                </span>
                 <input
                   value={query}
                   onChange={(event) => {
@@ -370,12 +1045,12 @@ function App() {
                       setQuery(nextValue)
                     })
                   }}
-                  placeholder="Ejemplo: Matogrande, estudio, wifi, terraza..."
+                  placeholder="Ejemplo: Matogrande, wifi, 12 meses, mascotas..."
                   className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-inner shadow-slate-200/40 outline-none transition focus:border-slate-950"
                 />
               </label>
 
-              <div className="grid gap-4 lg:grid-cols-3">
+              <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-4">
                 <div>
                   <p className="mb-3 text-sm font-semibold text-slate-700">Fuente</p>
                   <div className="flex flex-wrap gap-2">
@@ -390,7 +1065,6 @@ function App() {
                     </FilterButton>
                   </div>
                 </div>
-
                 <div>
                   <p className="mb-3 text-sm font-semibold text-slate-700">Costo</p>
                   <div className="flex flex-wrap gap-2">
@@ -408,7 +1082,6 @@ function App() {
                     </FilterButton>
                   </div>
                 </div>
-
                 <div>
                   <p className="mb-3 text-sm font-semibold text-slate-700">Distancia</p>
                   <div className="flex flex-wrap gap-2">
@@ -423,35 +1096,57 @@ function App() {
                     </FilterButton>
                   </div>
                 </div>
+                <div>
+                  <p className="mb-3 text-sm font-semibold text-slate-700">Entrada septiembre 2026</p>
+                  <div className="flex flex-wrap gap-2">
+                    <FilterButton active={arrivalFilter === 'all'} onClick={() => setArrivalFilter('all')}>
+                      Todas
+                    </FilterButton>
+                    <FilterButton active={arrivalFilter === 'ready'} onClick={() => setArrivalFilter('ready')}>
+                      Sirven o no bloquean
+                    </FilterButton>
+                    <FilterButton active={arrivalFilter === 'blocked'} onClick={() => setArrivalFilter('blocked')}>
+                      No llegan
+                    </FilterButton>
+                  </div>
+                </div>
               </div>
             </div>
           </article>
 
           <article className="rounded-[2rem] border border-white/70 bg-white/82 p-5 shadow-[0_20px_60px_rgba(49,38,20,0.08)] backdrop-blur sm:p-6">
-            <p className="text-xs font-extrabold uppercase tracking-[0.22em] text-slate-400">Metodologia</p>
-            <h2 className="mt-2 font-display text-3xl leading-tight text-slate-950">Lo que si esta documentado</h2>
+            <p className="text-xs font-extrabold uppercase tracking-[0.22em] text-slate-400">Promedio util</p>
+            <h2 className="mt-2 font-display text-3xl leading-tight text-slate-950">Tres referencias rapidas</h2>
             <div className="mt-5 grid gap-4">
               <div className="rounded-2xl bg-slate-100/85 p-4">
-                <p className="text-sm font-semibold text-slate-900">Universidad</p>
+                <p className="text-sm font-semibold text-slate-900">Promedio de los 3 presupuestos buenos</p>
+                <p className="mt-2 text-2xl font-black text-slate-950">{currencyEuro.format(scenarioAverage)}</p>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
-                  La referencia del campus sale de{' '}
-                  <a className="font-semibold text-slate-950 underline decoration-slate-300 underline-offset-4" href={campus.source_url} target="_blank" rel="noreferrer">
-                    la UDC
-                  </a>
-                  . La referencia usada para la app es la ETSAC en Campus da Zapateira, con lineas 24 y UDC.
+                  Sirve como referencia anual para no quedarte solo con la renta base mas baja.
                 </p>
               </div>
               <div className="rounded-2xl bg-slate-100/85 p-4">
-                <p className="text-sm font-semibold text-slate-900">Tipo de cambio</p>
+                <p className="text-sm font-semibold text-slate-900">Internet de referencia</p>
+                <p className="mt-2 text-2xl font-black text-slate-950">
+                  {currencyEuro.format(planningData.utilities.internetBaselineEur)}/mes
+                </p>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
-                  1 EUR = {reportData.exchange.eur_to_mxn.toFixed(4)} MXN con fecha {reportData.exchange.date}.
+                  Es el valor que se mete cuando una ficha no incluye wifi ni internet.
                 </p>
               </div>
               <div className="rounded-2xl bg-slate-100/85 p-4">
-                <p className="text-sm font-semibold text-slate-900">Lectura correcta del costo</p>
+                <p className="text-sm font-semibold text-slate-900">Traslado mas conservador</p>
+                <p className="mt-2 text-2xl font-black text-slate-950">
+                  {currencyEuro.format(
+                    planningData.transport.rideBands.at(-1).ridesPerMonth *
+                      planningData.transport.farePerRideEur *
+                      (planningData.transport.activeMonths + planningData.transport.lightMonthFactor),
+                  )}
+                  /anio
+                </p>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
-                  Base significa renta sin cerrar suministros. Cerrado indica que el anuncio incluye o casi
-                  incluye facturas. Variable marca precios que cambian por mes o duracion.
+                  Incluso la banda mas alejada pesa poco frente al alquiler porque la tarifa universitaria es muy
+                  baja.
                 </p>
               </div>
             </div>
@@ -466,8 +1161,7 @@ function App() {
                 <h2 className="mt-2 font-display text-3xl text-slate-950">Ubicacion de las opciones</h2>
               </div>
               <p className="max-w-xl text-sm leading-6 text-slate-500">
-                Azul = Idealista, verde = Spotahome, rojo = Campus. Si una direccion no era publica, se uso el
-                punto aproximado que si mostraba el anuncio.
+                Azul = Idealista, verde = Spotahome, rojo = Arquitectura UDC.
               </p>
             </div>
             <div className="overflow-hidden rounded-[1.6rem] border border-slate-200/80">
@@ -478,7 +1172,6 @@ function App() {
                   attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
                 />
                 <FitMapToListings campus={campus} listings={filteredListings} />
-
                 <CircleMarker
                   center={[campus.lat, campus.lon]}
                   radius={9}
@@ -493,7 +1186,6 @@ function App() {
                     </div>
                   </Popup>
                 </CircleMarker>
-
                 {filteredListings.map((item) => (
                   <CircleMarker
                     key={item.id}
@@ -510,7 +1202,10 @@ function App() {
                       <div className="max-w-60 space-y-2 text-sm text-slate-700">
                         <p className="font-semibold text-slate-950">{item.title}</p>
                         <p>{item.location_label}</p>
-                        <p>{currencyEuro.format(item.price_eur)} • {formatDistance(item.distance_km)}</p>
+                        <p>
+                          {currencyEuro.format(item.monthlyAverageTotal)} • {formatDistance(item.distance_km)}
+                        </p>
+                        <p>{currencyEuro.format(item.annualRecurringTotal)} al anio</p>
                         <a href={item.url} target="_blank" rel="noreferrer">
                           Abrir anuncio
                         </a>
@@ -524,8 +1219,8 @@ function App() {
 
           <aside className="grid gap-4">
             <article className="rounded-[2rem] border border-white/70 bg-white/88 p-5 shadow-[0_20px_60px_rgba(49,38,20,0.08)] backdrop-blur">
-              <p className="text-xs font-extrabold uppercase tracking-[0.22em] text-slate-400">Leyenda</p>
-              <h2 className="mt-2 font-display text-3xl text-slate-950">Contexto rapido</h2>
+              <p className="text-xs font-extrabold uppercase tracking-[0.22em] text-slate-400">Lectura del mapa</p>
+              <h2 className="mt-2 font-display text-3xl text-slate-950">Que si y que no significa</h2>
               <div className="mt-5 flex flex-wrap gap-2">
                 <MapLegendChip tone="bg-sky-100 text-sky-800 ring-sky-900/10">Idealista</MapLegendChip>
                 <MapLegendChip tone="bg-emerald-100 text-emerald-800 ring-emerald-900/10">Spotahome</MapLegendChip>
@@ -534,36 +1229,22 @@ function App() {
                 <MapLegendChip tone="bg-amber-100 text-amber-800 ring-amber-900/10">variable</MapLegendChip>
               </div>
               <div className="mt-5 space-y-4 text-sm leading-6 text-slate-600">
-                <p>
-                  El filtro actual deja <span className="font-bold text-slate-950">{filteredListings.length}</span>{' '}
-                  opciones visibles.
-                </p>
-                <p>
-                  <span className="font-bold text-slate-950">{visibleBudget}</span> caben en el tope de{' '}
-                  {currencyPeso.format(reportData.summary.budget_mxn)}.
-                </p>
-                <p>
-                  La distancia es una comparacion homogenea contra el campus, no tiempo real de bus o caminata.
-                </p>
+                <p>La distancia es una comparacion homogenea contra la ETSAC, no tiempo real de Google Maps.</p>
+                <p>El costo anual ya suma servicios y traslado. La fianza se separa para no inflar el total recurrente.</p>
+                <p>Si una ficha bloquea la entrada hasta 2027, aparece marcada y conviene descartarla para septiembre de 2026.</p>
               </div>
             </article>
 
             <article className="rounded-[2rem] border border-white/70 bg-white/88 p-5 shadow-[0_20px_60px_rgba(49,38,20,0.08)] backdrop-blur">
-              <p className="text-xs font-extrabold uppercase tracking-[0.22em] text-slate-400">Sugerencia</p>
-              <h2 className="mt-2 font-display text-3xl text-slate-950">Primer corte recomendado</h2>
-              <div className="mt-4 space-y-4 text-sm leading-6 text-slate-600">
-                <p>
-                  Si quieres reducir rapido: filtra a <span className="font-bold text-slate-950">menos de 2 km</span>{' '}
-                  y compara primero O Picho, Someso, Mesoiro y La Zapateira.
-                </p>
-                <p>
-                  Si prefieres costos mas predecibles: revisa primero las opciones{' '}
-                  <span className="font-bold text-slate-950">cerradas</span> de Spotahome.
-                </p>
-                <p>
-                  Si buscas pagar menos: comienza por el ranking y abre los anuncios con mejor relacion precio-distancia.
-                </p>
-              </div>
+              <p className="text-xs font-extrabold uppercase tracking-[0.22em] text-slate-400">Checklist</p>
+              <h2 className="mt-2 font-display text-3xl text-slate-950">Requisitos tipicos</h2>
+              <ul className="mt-4 space-y-3 text-sm leading-6 text-slate-600">
+                <li className="rounded-2xl bg-slate-100/85 px-4 py-3">Carta de aceptacion o matricula de la UDC.</li>
+                <li className="rounded-2xl bg-slate-100/85 px-4 py-3">Pasaporte, NIE si ya lo tienes, y contacto local.</li>
+                <li className="rounded-2xl bg-slate-100/85 px-4 py-3">Prueba de fondos, beca, nomina o aval si el casero lo pide.</li>
+                <li className="rounded-2xl bg-slate-100/85 px-4 py-3">Primer mes, fianza y a veces reserva o garantia adicional.</li>
+                <li className="rounded-2xl bg-slate-100/85 px-4 py-3">Para contratos de mas de 6 meses, confirma por escrito servicios, inventario, duracion y fecha exacta de entrada.</li>
+              </ul>
             </article>
           </aside>
         </section>
@@ -572,11 +1253,10 @@ function App() {
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <p className="text-xs font-extrabold uppercase tracking-[0.22em] text-slate-400">Ranking</p>
-              <h2 className="mt-2 font-display text-3xl text-slate-950">Orden por costo publicado</h2>
+              <h2 className="mt-2 font-display text-3xl text-slate-950">Orden por costo publicado y total real</h2>
             </div>
             <p className="max-w-2xl text-sm leading-6 text-slate-500">
-              El ranking siempre se mantiene ordenado por costo publicado. Si no ves algo, probablemente quedo
-              fuera por el filtro actual.
+              El orden sigue el precio publicado del anuncio. Aun asi, aqui ya se ve lo que realmente cuesta sostener el intercambio durante todo el anio.
             </p>
           </div>
           <div className="mt-5 overflow-x-auto">
@@ -585,10 +1265,11 @@ function App() {
                 <tr className="border-b border-slate-200 text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">
                   <th className="px-3 py-3">#</th>
                   <th className="px-3 py-3">Anuncio</th>
-                  <th className="px-3 py-3">Costo</th>
-                  <th className="px-3 py-3">Distancia</th>
-                  <th className="px-3 py-3">Tipo</th>
-                  <th className="px-3 py-3">Fuente</th>
+                  <th className="px-3 py-3">Publicado</th>
+                  <th className="px-3 py-3">Mes real</th>
+                  <th className="px-3 py-3">Anio real</th>
+                  <th className="px-3 py-3">Caja inicial</th>
+                  <th className="px-3 py-3">Sept 2026</th>
                 </tr>
               </thead>
               <tbody className="text-sm text-slate-600">
@@ -597,21 +1278,33 @@ function App() {
                     <td className="px-3 py-4 font-semibold text-slate-950">{item.rank}</td>
                     <td className="px-3 py-4">
                       <p className="font-semibold text-slate-950">{item.title}</p>
-                      <p className="mt-1 text-xs text-slate-500">{item.location_label}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {item.location_label} • {formatDistance(item.distance_km)}
+                      </p>
                     </td>
                     <td className="px-3 py-4">
                       <p className="font-semibold text-slate-950">{currencyEuro.format(item.price_eur)}</p>
-                      <p className="mt-1 text-xs text-slate-500">{currencyPeso.format(item.price_mxn)}</p>
-                    </td>
-                    <td className="px-3 py-4">{formatDistance(item.distance_km)}</td>
-                    <td className="px-3 py-4">
-                      <span className={cx('inline-flex rounded-full px-3 py-1 text-xs font-semibold capitalize ring-1', modeStyles[item.cost_mode])}>
-                        {item.cost_mode}
-                      </span>
+                      <p className="mt-1 text-xs text-slate-500">{item.cost_mode}</p>
                     </td>
                     <td className="px-3 py-4">
-                      <span className={cx('inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1', sourceStyles[item.source].pill)}>
-                        {item.source}
+                      <p className="font-semibold text-slate-950">{currencyEuro.format(item.monthlyAverageTotal)}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {currencyEuro.format(item.utilities.total)} servicios
+                      </p>
+                    </td>
+                    <td className="px-3 py-4">
+                      <p className="font-semibold text-slate-950">{currencyEuro.format(item.annualRecurringTotal)}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {currencyPeso.format(item.annualRecurringTotal * reportData.exchange.eur_to_mxn)}
+                      </p>
+                    </td>
+                    <td className="px-3 py-4">
+                      <p className="font-semibold text-slate-950">{currencyEuro.format(item.startup.cashNeeded)}</p>
+                      <p className="mt-1 text-xs text-slate-500">{item.startup.depositMonths} mes(es) de fianza</p>
+                    </td>
+                    <td className="px-3 py-4">
+                      <span className={cx('inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1', availabilityStyles[item.availability.status])}>
+                        {item.availability.label}
                       </span>
                     </td>
                   </tr>
@@ -628,13 +1321,45 @@ function App() {
               <h2 className="mt-2 font-display text-3xl text-slate-950">Todas las opciones visibles</h2>
             </div>
             <p className="max-w-2xl text-sm leading-6 text-slate-500">
-              Cada ficha conserva imagen, resumen, servicios y enlaces reales a la publicacion y la ruta al campus.
+              Cada ficha ya trae galeria, presupuesto anual, servicios, traslado, caja inicial y requisitos publicados o inferidos de manera conservadora.
             </p>
           </div>
-
           <div className="mt-5 grid gap-5 lg:grid-cols-2">
             {filteredListings.map((item) => (
               <ListingCard key={item.id} item={item} />
+            ))}
+          </div>
+        </section>
+
+        <section className="mt-6 rounded-[2rem] border border-white/70 bg-white/88 p-5 shadow-[0_20px_60px_rgba(49,38,20,0.08)] backdrop-blur sm:p-6">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-xs font-extrabold uppercase tracking-[0.22em] text-slate-400">Fuentes reales</p>
+              <h2 className="mt-2 font-display text-3xl text-slate-950">Enlaces usados para el presupuesto</h2>
+            </div>
+            <p className="max-w-2xl text-sm leading-6 text-slate-500">
+              Todo lo que ves arriba sale de los anuncios que diste y de fuentes publicas para universidad, transporte, cambio e hipotesis de contratacion.
+            </p>
+          </div>
+          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {[
+              { title: 'ETSAC - Arquitectura UDC', url: campus.source_url, note: campus.source_note },
+              { title: `Calendario UDC ${planningData.academicYear.publishedCourse}`, url: planningData.academicYear.publishedSourceUrl, note: planningData.academicYear.note },
+              { title: 'PDF oficial del calendario publicado', url: planningData.academicYear.publishedPdfUrl, note: 'Se usa como patron para el anio septiembre 2026 a agosto 2027.' },
+              { title: 'Tarifa oficial del bus urbano', url: planningData.transport.sourceUrl, note: planningData.transport.note },
+              { title: 'Tipo de cambio EUR/MXN del BCE', url: reportData.exchange.source_url, note: `Cambio usado: ${reportData.exchange.eur_to_mxn.toFixed(4)} MXN por EUR en ${reportData.exchange.date}.` },
+              { title: 'Fibra de referencia para internet', url: planningData.utilities.internetSourceUrl, note: planningData.utilities.note },
+              { title: 'Documentos habituales para alquilar', url: planningData.renting.documentsUrl, note: 'Checklist base para no quedarte corto al escribir o firmar.' },
+              { title: 'Fianza y garantia adicional', url: planningData.renting.depositUrl, note: 'Apoya el criterio de separar la fianza del costo recurrente anual.' },
+              { title: 'Como funciona Spotahome', url: planningData.renting.spotahomeHowItWorksUrl, note: 'Sirve para revisar reserva online, condiciones y pasos previos.' },
+            ].map((source) => (
+              <article key={source.url} className="rounded-2xl bg-slate-100/85 p-4">
+                <p className="text-sm font-semibold text-slate-900">{source.title}</p>
+                <p className="mt-2 text-sm leading-6 text-slate-600">{source.note}</p>
+                <a className="mt-3 inline-flex text-sm font-semibold text-slate-950 underline decoration-slate-300 underline-offset-4" href={source.url} target="_blank" rel="noreferrer">
+                  Abrir fuente
+                </a>
+              </article>
             ))}
           </div>
         </section>
