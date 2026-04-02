@@ -45,6 +45,14 @@ const dateFormatter = new Intl.DateTimeFormat('es-ES', {
   year: 'numeric',
 })
 
+function convertToMxn(amount) {
+  return amount * reportData.exchange.eur_to_mxn
+}
+
+function formatMoneyBoth(amount) {
+  return `${currencyEuro.format(amount)} · ${currencyPeso.format(convertToMxn(amount))}`
+}
+
 const academicMonths = [
   { key: 'sep', label: 'sep 2026' },
   { key: 'oct', label: 'oct 2026' },
@@ -497,6 +505,15 @@ function StatCard({ label, value, note }) {
   )
 }
 
+function MoneyStack({ amount, euroClass = 'text-2xl font-extrabold text-slate-950', pesoClass = 'mt-1 text-sm font-semibold text-slate-500' }) {
+  return (
+    <div>
+      <p className={euroClass}>{currencyEuro.format(amount)}</p>
+      <p className={pesoClass}>{currencyPeso.format(convertToMxn(amount))}</p>
+    </div>
+  )
+}
+
 function MapLegendChip({ tone, children }) {
   return (
     <span className={cx('inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1', tone)}>
@@ -521,20 +538,24 @@ function ScenarioCard({ scenario }) {
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <div className="rounded-2xl bg-white/10 p-3">
             <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-white/50">Total anual</p>
-            <p className="mt-2 text-lg font-bold text-white">
-              {currencyEuro.format(scenario.item.annualRecurringTotal)}
-            </p>
+            <MoneyStack
+              amount={scenario.item.annualRecurringTotal}
+              euroClass="mt-2 text-lg font-bold text-white"
+              pesoClass="mt-1 text-xs font-semibold text-white/70"
+            />
           </div>
           <div className="rounded-2xl bg-white/10 p-3">
             <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-white/50">Mes comparable</p>
-            <p className="mt-2 text-lg font-bold text-white">
-              {currencyEuro.format(scenario.item.monthlyAverageTotal)}
-            </p>
+            <MoneyStack
+              amount={scenario.item.monthlyAverageTotal}
+              euroClass="mt-2 text-lg font-bold text-white"
+              pesoClass="mt-1 text-xs font-semibold text-white/70"
+            />
           </div>
         </div>
         <p className="mt-4 text-sm leading-6 text-white/72">
-          Servicios estimados: {currencyEuro.format(scenario.item.utilities.total)}/mes. Traslado:{' '}
-          {currencyEuro.format(scenario.item.transport.annual)}/anio.
+          Servicios estimados: {formatMoneyBoth(scenario.item.utilities.total)}/mes. Traslado:{' '}
+          {formatMoneyBoth(scenario.item.transport.annual)}/anio.
         </p>
       </div>
     </article>
@@ -654,9 +675,11 @@ function ListingCard({ item }) {
           </div>
 
           <div className="flex flex-wrap items-end gap-3">
-            <p className="text-3xl font-black text-slate-950">
-              {currencyEuro.format(item.monthlyAverageTotal)}
-            </p>
+            <MoneyStack
+              amount={item.monthlyAverageTotal}
+              euroClass="text-3xl font-black text-slate-950"
+              pesoClass="mt-1 text-sm font-semibold text-slate-500"
+            />
             <p className="pb-1 text-sm font-medium text-slate-500">mes comparable real</p>
           </div>
 
@@ -684,31 +707,40 @@ function ListingCard({ item }) {
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
               <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">Renta anual</p>
-              <p className="mt-2 text-lg font-bold text-slate-950">{currencyEuro.format(item.annualRent)}</p>
+              <MoneyStack
+                amount={item.annualRent}
+                euroClass="mt-2 text-lg font-bold text-slate-950"
+                pesoClass="mt-1 text-xs font-semibold text-slate-500"
+              />
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
               <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">
                 Total anual recurrente
               </p>
-              <p className="mt-2 text-lg font-bold text-slate-950">
-                {currencyEuro.format(item.annualRecurringTotal)}
-              </p>
+              <MoneyStack
+                amount={item.annualRecurringTotal}
+                euroClass="mt-2 text-lg font-bold text-slate-950"
+                pesoClass="mt-1 text-xs font-semibold text-slate-500"
+              />
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
               <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">
                 Servicios estimados
               </p>
-              <p className="mt-2 text-lg font-bold text-slate-950">
-                {currencyEuro.format(item.utilities.total)}/mes
-              </p>
+              <div>
+                <p className="mt-2 text-lg font-bold text-slate-950">{currencyEuro.format(item.utilities.total)}/mes</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">{currencyPeso.format(convertToMxn(item.utilities.total))}/mes</p>
+              </div>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
               <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">
                 Caja inicial estimada
               </p>
-              <p className="mt-2 text-lg font-bold text-slate-950">
-                {currencyEuro.format(item.startup.cashNeeded)}
-              </p>
+              <MoneyStack
+                amount={item.startup.cashNeeded}
+                euroClass="mt-2 text-lg font-bold text-slate-950"
+                pesoClass="mt-1 text-xs font-semibold text-slate-500"
+              />
             </div>
           </div>
 
@@ -735,16 +767,16 @@ function ListingCard({ item }) {
               <div className="rounded-2xl bg-white p-4">
                 <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">Renta media</p>
                 <p className="mt-2 text-base font-semibold text-slate-900">
-                  {currencyEuro.format(item.averageMonthlyRent)}/mes
+                  {formatMoneyBoth(item.averageMonthlyRent)}/mes
                 </p>
                 <p className="mt-2 text-sm text-slate-500">
-                  {currencyEuro.format(item.annualRent)} entre {academicMonths.length} meses.
+                  {formatMoneyBoth(item.annualRent)} entre {academicMonths.length} meses.
                 </p>
               </div>
               <div className="rounded-2xl bg-white p-4">
                 <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-slate-400">Traslado</p>
                 <p className="mt-2 text-base font-semibold text-slate-900">
-                  {currencyEuro.format(item.transport.annual)}/anio
+                  {formatMoneyBoth(item.transport.annual)}/anio
                 </p>
                 <p className="mt-2 text-sm text-slate-500">{item.transport.note}</p>
               </div>
@@ -754,20 +786,20 @@ function ListingCard({ item }) {
                 </p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                    Electricidad: {currencyEuro.format(item.utilities.breakdown.electricity)}
+                    Electricidad: {formatMoneyBoth(item.utilities.breakdown.electricity)}
                   </p>
                   <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                    Gas o calefaccion: {currencyEuro.format(item.utilities.breakdown.gas)}
+                    Gas o calefaccion: {formatMoneyBoth(item.utilities.breakdown.gas)}
                   </p>
                   <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                    Agua: {currencyEuro.format(item.utilities.breakdown.water)}
+                    Agua: {formatMoneyBoth(item.utilities.breakdown.water)}
                   </p>
                   <p className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                    Internet: {currencyEuro.format(item.utilities.breakdown.internet)}
+                    Internet: {formatMoneyBoth(item.utilities.breakdown.internet)}
                   </p>
                 </div>
                 <p className="mt-3 text-sm leading-6 text-slate-500">
-                  Total servicios: {currencyEuro.format(item.utilities.total)}/mes. La fianza no entra en el
+                  Total servicios: {formatMoneyBoth(item.utilities.total)}/mes. La fianza no entra en el
                   costo anual porque deberia recuperarse al salir si todo queda bien.
                 </p>
               </div>
@@ -788,10 +820,10 @@ function ListingCard({ item }) {
               </ul>
               <div className="grid gap-3 sm:grid-cols-2">
                 <p className="rounded-2xl bg-white px-4 py-3 text-sm text-slate-700">
-                  Llegada puente: {item.startup.arrivalDays} noches x {currencyEuro.format(planningData.arrival.nightlyBufferEur)}.
+                  Llegada puente: {item.startup.arrivalDays} noches x {formatMoneyBoth(planningData.arrival.nightlyBufferEur)}.
                 </p>
                 <p className="rounded-2xl bg-white px-4 py-3 text-sm text-slate-700">
-                  Fianza presupuestada: {item.startup.depositMonths} mes(es) recuperables.
+                  Fianza presupuestada: {item.startup.depositMonths} mes(es) recuperables. Caja sugerida: {formatMoneyBoth(item.startup.cashNeeded)}.
                 </p>
               </div>
             </div>
@@ -808,7 +840,7 @@ function ListingCard({ item }) {
                     key={`${item.id}-${month.key}`}
                     className="rounded-full bg-white px-3 py-2 text-xs font-semibold text-slate-700 ring-1 ring-slate-200"
                   >
-                    {month.label}: {currencyEuro.format(month.rent)}
+                    {month.label}: {formatMoneyBoth(month.rent)}
                   </span>
                 ))}
               </div>
@@ -925,7 +957,7 @@ function App() {
                   ETSAC • Campus da Zapateira • lineas 24 y UDC
                 </span>
                 <span className="rounded-full bg-white/12 px-4 py-2 ring-1 ring-white/10">
-                  Bus universitario: {currencyEuro.format(planningData.transport.farePerRideEur)} por viaje
+                  Bus universitario: {formatMoneyBoth(planningData.transport.farePerRideEur)} por viaje
                 </span>
               </div>
             </div>
@@ -946,17 +978,17 @@ function App() {
           />
           <StatCard
             label="Promedio mensual real"
-            value={filteredListings.length ? currencyEuro.format(visibleMonthlyAverage) : 'Sin resultados'}
+            value={filteredListings.length ? formatMoneyBoth(visibleMonthlyAverage) : 'Sin resultados'}
             note="Renta media del anio + servicios estimados + transporte prorrateado."
           />
           <StatCard
             label="Promedio anual"
-            value={filteredListings.length ? currencyEuro.format(visibleAnnualAverage) : 'Sin resultados'}
+            value={filteredListings.length ? formatMoneyBoth(visibleAnnualAverage) : 'Sin resultados'}
             note="No incluye fianza porque la fianza deberia recuperarse al salir."
           />
           <StatCard
             label="Caja inicial media"
-            value={filteredListings.length ? currencyEuro.format(visibleStartupAverage) : 'Sin resultados'}
+            value={filteredListings.length ? formatMoneyBoth(visibleStartupAverage) : 'Sin resultados'}
             note={`Incluye renta del primer mes, fianza minima y puente de ${planningData.arrival.nightlyBufferEur} €/noche.`}
           />
         </section>
@@ -1120,7 +1152,7 @@ function App() {
             <div className="mt-5 grid gap-4">
               <div className="rounded-2xl bg-slate-100/85 p-4">
                 <p className="text-sm font-semibold text-slate-900">Promedio de los 3 presupuestos buenos</p>
-                <p className="mt-2 text-2xl font-black text-slate-950">{currencyEuro.format(scenarioAverage)}</p>
+                <p className="mt-2 text-2xl font-black text-slate-950">{formatMoneyBoth(scenarioAverage)}</p>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
                   Sirve como referencia anual para no quedarte solo con la renta base mas baja.
                 </p>
@@ -1128,7 +1160,7 @@ function App() {
               <div className="rounded-2xl bg-slate-100/85 p-4">
                 <p className="text-sm font-semibold text-slate-900">Internet de referencia</p>
                 <p className="mt-2 text-2xl font-black text-slate-950">
-                  {currencyEuro.format(planningData.utilities.internetBaselineEur)}/mes
+                  {formatMoneyBoth(planningData.utilities.internetBaselineEur)}/mes
                 </p>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
                   Es el valor que se mete cuando una ficha no incluye wifi ni internet.
@@ -1137,7 +1169,7 @@ function App() {
               <div className="rounded-2xl bg-slate-100/85 p-4">
                 <p className="text-sm font-semibold text-slate-900">Traslado mas conservador</p>
                 <p className="mt-2 text-2xl font-black text-slate-950">
-                  {currencyEuro.format(
+                  {formatMoneyBoth(
                     planningData.transport.rideBands.at(-1).ridesPerMonth *
                       planningData.transport.farePerRideEur *
                       (planningData.transport.activeMonths + planningData.transport.lightMonthFactor),
@@ -1203,9 +1235,9 @@ function App() {
                         <p className="font-semibold text-slate-950">{item.title}</p>
                         <p>{item.location_label}</p>
                         <p>
-                          {currencyEuro.format(item.monthlyAverageTotal)} • {formatDistance(item.distance_km)}
+                          {formatMoneyBoth(item.monthlyAverageTotal)} • {formatDistance(item.distance_km)}
                         </p>
-                        <p>{currencyEuro.format(item.annualRecurringTotal)} al anio</p>
+                        <p>{formatMoneyBoth(item.annualRecurringTotal)} al anio</p>
                         <a href={item.url} target="_blank" rel="noreferrer">
                           Abrir anuncio
                         </a>
@@ -1284,12 +1316,14 @@ function App() {
                     </td>
                     <td className="px-3 py-4">
                       <p className="font-semibold text-slate-950">{currencyEuro.format(item.price_eur)}</p>
-                      <p className="mt-1 text-xs text-slate-500">{item.cost_mode}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {currencyPeso.format(convertToMxn(item.price_eur))} • {item.cost_mode}
+                      </p>
                     </td>
                     <td className="px-3 py-4">
                       <p className="font-semibold text-slate-950">{currencyEuro.format(item.monthlyAverageTotal)}</p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {currencyEuro.format(item.utilities.total)} servicios
+                        {currencyPeso.format(convertToMxn(item.monthlyAverageTotal))} • {currencyEuro.format(item.utilities.total)} servicios
                       </p>
                     </td>
                     <td className="px-3 py-4">
@@ -1300,7 +1334,9 @@ function App() {
                     </td>
                     <td className="px-3 py-4">
                       <p className="font-semibold text-slate-950">{currencyEuro.format(item.startup.cashNeeded)}</p>
-                      <p className="mt-1 text-xs text-slate-500">{item.startup.depositMonths} mes(es) de fianza</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {currencyPeso.format(convertToMxn(item.startup.cashNeeded))} • {item.startup.depositMonths} mes(es) de fianza
+                      </p>
                     </td>
                     <td className="px-3 py-4">
                       <span className={cx('inline-flex rounded-full px-3 py-1 text-xs font-semibold ring-1', availabilityStyles[item.availability.status])}>
