@@ -89,6 +89,56 @@ export const planningData = {
     note:
       'Para anuncios de agencia/particular como Idealista conviene llegar una semana antes para visitar, firmar, pagar fianza y levantar inventario. Con reserva online suele bastar un margen de 3 dias si la entrada ya esta cerrada.',
   },
+  exchange: {
+    note:
+      'Como la estancia modelada va de septiembre de 2026 a agosto de 2027, aqui se presupuestan los tramites de una movilidad mexicana superior a 180 dias: visado nacional de estudios antes de viajar, TIE en Espana, seguro medico valido toda la estancia y seguro de accidentes UDC.',
+    studyVisaUrl:
+      'https://exteriores.gob.es/Consulados/mexico/es/ServiciosConsulares/Paginas/index.aspx?scca=Visados&scco=M%25u00e9xico&scd=195&scs=Visados+Nacionales+-+Visado+de+estudios',
+    visaFeesUrl:
+      'https://www.exteriores.gob.es/Consulados/mexico/es/ServiciosConsulares/Paginas/TasasVisados.aspx',
+    indexedStudyVisaFeesUrl:
+      'https://www.exteriores.gob.es/DocumentosAuxiliaresSC/M%C3%A9xico/M%C3%89XICO%20%28C%29/VIS/TASAS%20VISADOS%2001.01.25%20ACTUALIZADA.xlsx.pdf',
+    tieFeeUrl: 'https://www.boe.es/diario_boe/txt.php?id=BOE-A-2025-12056',
+    udcInsuranceUrl: 'https://www.udc.es/export/sites/udc/iss/_galeria_down/UDC-Student-Guide_eng.pdf_2063069299.pdf',
+    medicalInsuranceUrl: 'https://www.sanitas.es/seguros/seguro-de-salud-sanitas-international-students',
+    flightsUrl: 'https://www.skyscanner.es/rutas-aereas/mexa/lcg/ciudad-de-mexico-a-la-coruna.html',
+    visaFeeMxn: 3226,
+    tieFeeEur: 16.08,
+    udcAccidentInsuranceEur: 10,
+    medicalInsuranceMonthlyEur: 41.45,
+    flightRoundTripEur: 770,
+    documentsBufferMxn: 3000,
+    proofOfFundsMonthlyEur: 600,
+    proofOfFundsAnnualEur: 7200,
+    resolutionDays: 30,
+    recommendedLeadDays: 60,
+    checklist: [
+      'Visado nacional de estudios antes de volar, porque la estancia supera 180 dias.',
+      'Seguro medico publico o privado valido en Espana durante toda la estancia, con cobertura similar al SNS y sin quedarte corto para el consulado.',
+      'Constancia federal de antecedentes penales de Mexico, impresa en color y apostillada antes de presentarla al consulado.',
+      'Certificado medico reciente si la estancia supera 180 dias.',
+      'TIE dentro del primer mes en Espana cuando el visado cubre estudios de larga duracion.',
+    ],
+    timing: [
+      'El Consulado de Espana en Mexico publica un plazo medio de resolucion de 30 dias para estudios cuando el expediente esta completo.',
+      'Para no quedar atrapada por citas, apostillas y correcciones, conviene armar expediente y seguro entre 8 y 10 semanas antes del inicio.',
+      'La ficha de estudios indexada por el buscador indica que, si la estancia autorizada supera 180 dias, el visado puede ser valido por 365 dias de estancia.',
+    ],
+  },
+  unam: {
+    requirementsUrl: 'https://www.unaminternacional.unam.mx/file/68',
+    scholarshipUrl: 'https://www.unaminternacional.unam.mx/file/1262',
+    insuranceAidUrl: 'https://www.unaminternacional.unam.mx/file/1385',
+    countryScholarshipMxn: 110000,
+    insuranceAidEur: 150,
+    note:
+      'La DGECI publica convocatorias donde Espana entra en el tabulador de 110,000 MXN para movilidad semestral y algunas convocatorias Erasmus+ agregan ayuda de viaje y 150 € para seguro. No se descuentan del presupuesto hasta tener asignacion formal.',
+    checklist: [
+      'Cumplir con los requisitos internos de movilidad de tu entidad academica UNAM y contar con oficio de postulacion.',
+      'Tener carta de aceptacion de la UDC, programa academico autorizado y registro DGECI completo.',
+      'No asumir el deposito de la beca para pagar el primer mes: la propia UNAM advierte que alojamiento, manutencion del primer mes y seguro pueden salir primero de tu bolsillo.',
+    ],
+  },
   renting: {
     documentsUrl:
       'https://www.idealista.com/news/inmobiliario/vivienda/2023/07/27/807060-que-documentos-debes-entregar-para-alquilar-un-piso',
