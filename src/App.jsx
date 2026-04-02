@@ -1,5 +1,6 @@
 import { startTransition, useDeferredValue, useEffect, useState } from 'react'
 import { CircleMarker, MapContainer, Popup, TileLayer, useMap } from 'react-leaflet'
+import { idealistaMeta } from './data/idealistaMeta'
 import { planningData } from './data/planningData'
 import { reportData } from './data/reportData'
 import { spotahomeMeta } from './data/spotahomeMeta'
@@ -328,6 +329,18 @@ function getRequirements(item, meta, availability) {
 }
 
 function getPhotoGallery(item, meta) {
+  if (meta?.photoUrls?.length) {
+    return {
+      photos: meta.photoUrls,
+      capturedCount: meta.photoUrls.length,
+      totalCount: meta.photoUrls.length,
+      note:
+        meta.photoUrls.length > 1
+          ? `Galeria real capturada desde Idealista: ${meta.photoUrls.length} fotos visibles del anuncio.`
+          : 'Solo se pudo capturar una foto real de Idealista en esta sesion.',
+    }
+  }
+
   if (meta?.photoIds?.length) {
     return {
       photos: meta.photoIds.map(spotPhotoUrl),
@@ -361,7 +374,7 @@ function getPhotoGallery(item, meta) {
 }
 
 function enrichListing(item, campus) {
-  const meta = spotahomeMeta[item.id]
+  const meta = item.source === 'Spotahome' ? spotahomeMeta[item.id] : idealistaMeta[item.id]
   const distance_km = haversineKm(item.lat, item.lon, campus.lat, campus.lon)
   const maps_url =
     'https://www.google.com/maps/dir/?api=1' +
